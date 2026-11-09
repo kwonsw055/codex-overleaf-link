@@ -64,20 +64,18 @@ test('Run all diagnostics aggregates every check into one report', () => {
   assert.match(diag, /if \(Array\.isArray\(result\.checks\)/);
 });
 
-test('OT mirror and language controls live in Settings with stable control keys', () => {
+test('request-only Settings omit background OT controls and keep language controls', () => {
   const diag = repo('extension/src/content/diagnosticsPanel.js');
   const settings = repo('extension/src/content/settingsPanel.js');
 
   // Removed from the diagnostics menu.
   assert.doesNotMatch(diag, /data-language-toggle/);
   assert.doesNotMatch(diag, /data-experimental-ot\b/);
-  // Relocated into Settings and wired.
-  assert.match(settings, /data-experimental-ot\b/);
-  assert.match(settings, /data-set-group="experimental"/);
+  assert.doesNotMatch(settings, /data-experimental-ot\b/);
+  assert.doesNotMatch(settings, /data-set-group="experimental"/);
   assert.match(settings, /data-language-select/);
-  assert.match(settings, /data-i18n="otSettingsTitle"/);
   assert.doesNotMatch(settings, /data-i18n="experimentalTitle"/);
-  assert.match(settings, /onOtToggleClick/);
+  assert.doesNotMatch(settings, /onOtToggleClick/);
 });
 
 test('diagnostics health i18n is available in English and Chinese', () => {

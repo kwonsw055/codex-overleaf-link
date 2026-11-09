@@ -93,22 +93,6 @@
               <p class="codex-set-row-help" data-i18n="sensitiveConfirmHelp">Let you review and proceed when the scan flags content.</p>
             </div>
           </details>
-          <details class="codex-set-group" data-set-group="experimental">
-            <summary class="codex-set-group-head">
-              <span class="codex-set-group-title">${codexSetIcon('database')}<span data-i18n="otSettingsTitle">Project cache</span></span>
-              <span class="codex-set-saved" data-set-saved hidden>✓ <span data-i18n="settingsSaved">Saved</span></span>
-            </summary>
-            <div class="codex-set-card">
-              <label class="codex-project-settings-row codex-project-settings-row--switch">
-                <span class="codex-project-settings-row-label">
-                  <span data-i18n="experimentalOtMenuTitle">OT Mirror</span>
-                  <small class="codex-set-row-sub" data-i18n="experimentalOtMenuSubtitle">Warms recent edits to the active text file locally. File scope and freshness are checked before reuse.</small>
-                </span>
-                <input type="checkbox" class="codex-switch" data-experimental-ot>
-              </label>
-              <p class="codex-set-row-help" data-experimental-ot-menu-status aria-live="polite"></p>
-            </div>
-          </details>
         </div>
         <div class="codex-project-settings-scope codex-project-settings-scope--global">
           <details class="codex-set-group" data-set-group="history" data-history-card>
@@ -247,11 +231,6 @@
       if (event.target.open) instance.callbacks.onStorageOpen?.();
     });
     container.querySelector('[data-history-filter]')?.addEventListener('input', () => instance.callbacks.onHistoryFilter?.());
-    // OT mirror: a single visible switch; legacy storage/DOM keys are retained. The click is
-    // intercepted (the runtime's handler preventDefaults, runs the enable
-    // confirmation, then sets checked + drives the change flow itself) so the
-    // confirm-before-enable contract survives the control unification.
-    container.querySelector('[data-experimental-ot]')?.addEventListener('click', event => instance.callbacks.onOtToggleClick?.(event));
     // Personalization textarea: auto-save on change (the change event fires on blur — avoids per-keystroke saves).
     const customInstructionsInput = container.querySelector('[data-custom-instructions-input]');
     customInstructionsInput?.addEventListener('change', event => {

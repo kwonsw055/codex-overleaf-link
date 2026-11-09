@@ -21,6 +21,16 @@
     if (!result) {
       return;
     }
+    if (result.reviewingPolicy?.policy === 'temporary-reviewing' && !result.reviewingPolicy.leftEditing) {
+      appendRunEvent({
+        title: tx('Could not return Overleaf to Editing after writing.', '写入后无法将 Overleaf 切回 Editing。'),
+        status: 'warning',
+        detail: {
+          [tr('detailReason')]: result.reviewingPolicy.disable?.reason || '',
+          [tr('detailNext')]: tx('Switch Overleaf to Editing manually.', '请手动将 Overleaf 切回 Editing。')
+        }
+      });
+    }
     const appliedEntries = getAppliedEntries(result);
     const skippedEntries = getSkippedEntries(result);
     const applied = appliedEntries.length;

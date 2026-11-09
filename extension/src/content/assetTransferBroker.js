@@ -139,6 +139,10 @@
       // recordUndoFromApply classify a successful Track write as legacy Undo,
       // which hides Accept and prevents the lifecycle from surviving reload.
       merged.trackedChanges.push(...(Array.isArray(result?.trackedChanges) ? result.trackedChanges : []));
+      // Preserve mode-cleanup failures across text batches and binary uploads.
+      if (result?.reviewingPolicy && merged.reviewingPolicy?.leftEditing !== false) {
+        merged.reviewingPolicy = result.reviewingPolicy;
+      }
       if (result?.ok !== true) merged.ok = false;
     }
     if (merged.skipped.length) merged.ok = false;

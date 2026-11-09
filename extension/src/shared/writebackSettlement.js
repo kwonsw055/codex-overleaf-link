@@ -278,7 +278,10 @@
     // best-effort terminal policy.
     const incompleteReject = kind === 'reject'
       && collectRunResultSkipped(input.result).length > 0;
-    const needsReview = incompleteReject || (!successful && failures.some(failure =>
+    const incompleteAccept = kind === 'accept' && input.requireComplete === true
+      && (input.result?.ok !== true || collectRunResultSkipped(input.result).length > 0
+        || !isAcceptResultEffectivelyVerified(input.run, input.result));
+    const needsReview = incompleteAccept || incompleteReject || (!successful && failures.some(failure =>
       failure.terminalState === 'needs_review' || reviewCodes.has(failure.code)
     ));
     const status = needsReview ? 'needs_review' : kind === 'accept' ? 'accepted' : 'rejected';
@@ -707,6 +710,7 @@
     deriveApplyResultReadbacks,
     deriveLegacyProjection,
     buildContentFailure,
+    buildSessionAcceptBatch: OperationEvidence.buildSessionAcceptBatch,
     isAcceptResultEffectivelyVerified,
     isSuccessfulTrackedChangeSettlement,
     isUndoResultEffectivelyApplied,

@@ -78,7 +78,6 @@
   const CUSTOM_INSTRUCTIONS_MAX_CHARS = 12000;
   const PROJECT_PREF_KEY_MAX_CHARS = 160;
   const STORAGE_DEFAULT_LIMITS = {
-    maxSessions: 12,
     maxRunsPerSession: 10,
     maxEventsPerRun: 120,
     maxUndoRunsPerSession: 2,
@@ -97,7 +96,6 @@
     attachmentPreviewChars: 768 * 1024
   };
   const STORAGE_AGGRESSIVE_LIMITS = {
-    maxSessions: 4,
     maxRunsPerSession: 3,
     maxEventsPerRun: 20,
     maxUndoRunsPerSession: 1,
@@ -161,9 +159,8 @@
   }
 
   // Drop empty (non-displayable) sessions that are not the active one. Empty
-  // sessions never appear in the list yet still consume the storage cap, so they
-  // would otherwise accumulate and evict real history. The active session is
-  // always kept (even when empty) so the user is never left with nothing.
+  // sessions never appear in the list and would otherwise accumulate. The active
+  // session is always kept (even when empty) so the user is never left with nothing.
   function pruneHiddenEmptySessions(sessions, activeSessionId) {
     if (!Array.isArray(sessions) || sessions.length <= 1) {
       return sessions;
@@ -180,7 +177,7 @@
       .map(session => normalizeSession(session, state, options));
 
     if (sessions.length) {
-      return sessions.slice(-20);
+      return sessions;
     }
 
     const legacySession = input.session?.id ? input.session : createSession();
@@ -1008,8 +1005,10 @@
     const activeSessionId = typeof source.activeSessionId === 'string'
       ? source.activeSessionId
       : source.session?.id;
-    const selectedSessions = selectSessionsForStorage(sourceSessions, activeSessionId, limits.maxSessions);
-    const compactSessions = selectedSessions.map(session => compactSessionForStorage(session, source, limits));
+    // Compact each session's contents without dropping sessions based on count.
+    const compactSessions = sourceSessions
+      .filter(session => session && typeof session.id === 'string')
+      .map(session => compactSessionForStorage(session, source, limits));
     const resolvedActiveId = compactSessions.some(session => session.id === activeSessionId)
       ? activeSessionId
       : compactSessions[compactSessions.length - 1]?.id || '';
@@ -1079,24 +1078,6 @@
       titleSource: legacySession.titleSource,
       updatedAt: legacySession.updatedAt
     }];
-  }
-
-  function selectSessionsForStorage(sessions, activeSessionId, maxSessions) {
-    const filtered = (Array.isArray(sessions) ? sessions : [])
-      .filter(session => session && typeof session.id === 'string');
-    if (filtered.length <= maxSessions) {
-      return filtered;
-    }
-
-    const active = filtered.find(session => session.id === activeSessionId);
-    const recent = filtered.slice(-maxSessions);
-    if (!active || recent.some(session => session.id === active.id)) {
-      return recent;
-    }
-    return [
-      active,
-      ...recent.filter(session => session.id !== active.id).slice(-(maxSessions - 1))
-    ];
   }
 
   function compactSessionForStorage(session, fallbackState, limits) {

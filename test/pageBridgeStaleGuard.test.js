@@ -1288,6 +1288,8 @@ test('page bridge no-trace undo waits when active path switches before editor co
 test('page bridge records and rejects Overleaf tracked changes for Reviewing writes', async () => {
   const bridge = createPageBridgeHarness({
     activePath: 'main.tex',
+    reviewingClickBehavior: 'menu',
+    reviewingButtonShowsCurrentMode: true,
     reviewingOk: true,
     trackChangesOnDispatch: true,
     files: {
@@ -1315,6 +1317,8 @@ test('page bridge records and rejects Overleaf tracked changes for Reviewing wri
   assert.equal(bridge.getFile('main.tex'), 'alpha delta gamma');
   assert.equal(write.trackedChanges.length, 1);
   assert.equal(write.trackedChanges[0].path, 'main.tex');
+  assert.equal(bridge.isReviewingActive(), false, 'tracked write returns to Editing');
+  assert.equal(write.reviewingPolicy.leftEditing, true);
 
   const undo = await bridge.call('rejectTrackedChanges', {
     trackedChanges: write.trackedChanges,

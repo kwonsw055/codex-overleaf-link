@@ -256,6 +256,7 @@
   } = projectSettingsCoordinator;
 
   const otWarmMirror = Modules.OtWarmMirror.create({
+    backgroundSyncEnabled: false,
     otWarmMirrorController,
     runController,
     mirrorHealth,
@@ -572,8 +573,6 @@
     partitionUnsafeProjectPathOperations,
     evaluateGovernedOperations,
     buildGovernanceSkippedApplyResult,
-    buildReviewingBlockedApplyResult,
-    ensureReviewingBeforeWrite,
     confirmBinaryOperations,
     filterSyncChangesByOperations,
     writebackController,
@@ -1344,7 +1343,6 @@
       renderSessionList();
       renderRunHistory();
       renderContextSelection();
-      scheduleMirrorPrefetch({ reason: 'cold-start', delayMs: 2500 });
       primeCodexOverleafSkillsCatalog().catch(() => { /* non-blocking */ });
     }
 
@@ -2628,98 +2626,60 @@
 
   async function preflightWriteSafety(options = {}) {
     const mode = options.mode || state.mode;
-    const requireReviewing = typeof options.requireReviewing === 'boolean'
-      ? options.requireReviewing
-      : state?.requireReviewing === true;
-    if (mode === 'ask') {
-      return { ok: true, skipped: true };
-    }
-    const method = requireReviewing ? 'ensureReviewing' : 'ensureEditing';
-
+    // Keep the user's editor in Editing while Codex works. The page-side
+    // applyOperations transaction owns the temporary Reviewing switch.
     appendRunEvent({
-      title: requireReviewing
-        ? tx('Checking Overleaf Reviewing/Track Changes before starting.', '正在确认 Overleaf 留痕状态。')
-        : tx('Checking Overleaf Editing mode before starting.', '正在确认 Overleaf Editing 模式。'),
+      title: tx('Checking Overleaf Editing mode before starting.', '正在确认 Overleaf Editing 模式。'),
       status: 'running'
     });
 
-    let result = null;
+    let result;
     try {
-      // Thread runProjectId through so the page-bridge dispatcher applies the
-      // writeGuard. Without it, a mid-flight SPA navigation could leave the
-      // pre-flight ensureReviewing/Editing toggle landing in the wrong
-      // project — Track Changes flipped on/off in a project the user did
-      // not intend to write to.
-      result = await callPageBridge(method, {
+      result = await callPageBridge('ensureEditing', {
         waitMs: 1800,
         runProjectId: currentRunView?.runProjectId || ''
       });
     } catch (error) {
       result = {
         ok: false,
-        reason: error?.message || (requireReviewing
-          ? tx('Overleaf did not return track changes status', 'Overleaf 没有返回留痕状态')
-          : tx('Overleaf did not return Editing mode status', 'Overleaf 没有返回 Editing 模式状态')),
+        reason: error?.message || tx('Overleaf did not return Editing mode status', 'Overleaf 没有返回 Editing 模式状态'),
         reviewing: null
       };
     }
 
     if (result?.ok) {
       appendRunEvent({
-        title: requireReviewing
-          ? (result.activated
-            ? tx('Overleaf Reviewing/Track Changes is now on. Starting the task.', '已开启 Overleaf 留痕，开始处理任务。')
-            : tx('Overleaf Reviewing/Track Changes is already on. Starting the task.', 'Overleaf 留痕已经开启，开始处理任务。'))
-          : (result.activated
-            ? tx('Switched to Overleaf Editing. Starting the task.', '已切到 Overleaf Editing，开始处理任务。')
-            : tx('Overleaf is already in Editing mode. Starting the task.', 'Overleaf 已在 Editing 模式，开始处理任务。')),
+        title: result.activated
+          ? tx('Switched to Overleaf Editing. Starting the task.', '已切到 Overleaf Editing，开始处理任务。')
+          : tx('Overleaf is already in Editing mode. Starting the task.', 'Overleaf 已在 Editing 模式，开始处理任务。'),
         status: 'completed'
       });
       return result;
     }
 
-    const reason = localizeVisibleReason(result?.reason || (requireReviewing
-      ? tx('Overleaf did not return track changes status', 'Overleaf 没有返回留痕状态')
-      : tx('Overleaf did not return Editing mode status', 'Overleaf 没有返回 Editing 模式状态')));
-    const nextStep = requireReviewing
-      ? tx(
-        'You may not have permission, or this Overleaf page did not expose the Reviewing switch. Switch to Reviewing manually and retry, or turn off Track before writing.',
-        '你可能没有权限，或 Overleaf 当前页面没有暴露切换入口。可以手动切到 Reviewing 后重试，或关闭“留痕”再运行。'
-      )
-      : tx(
-        'You may not have permission, or this Overleaf page did not expose the Editing switch. Switch to Editing manually and retry.',
-        '你可能没有权限，或 Overleaf 当前页面没有暴露切换入口。请在 Overleaf 手动切到 Editing 后重试。'
-      );
+    const reason = localizeVisibleReason(result?.reason || tx('Overleaf did not return Editing mode status', 'Overleaf 没有返回 Editing 模式状态'));
+    // Read-only questions can still run when this project has no mode control.
+    if (mode === 'ask') {
+      appendRunEvent({ title: reason, status: 'warning' });
+      return { ok: true, skipped: true };
+    }
+    const nextStep = tx(
+      'You may not have permission, or this Overleaf page did not expose the Editing switch. Switch to Editing manually and retry.',
+      '你可能没有权限，或 Overleaf 当前页面没有暴露切换入口。请在 Overleaf 手动切到 Editing 后重试。'
+    );
     appendRunEvent({
-      title: requireReviewing
-        ? tx('Task not started: could not enable Overleaf Reviewing/Track Changes.', '任务未开始：无法开启 Overleaf 留痕。')
-        : tx('Task not started: could not switch to Overleaf Editing.', '任务未开始：无法切换到 Overleaf Editing。'),
+      title: tx('Task not started: could not switch to Overleaf Editing.', '任务未开始：无法切换到 Overleaf Editing。'),
       status: 'failed',
-      detail: {
-        [tr('detailReason')]: reason,
-        [tr('detailNext')]: nextStep
-      },
-      technicalDetail: {
-        reason,
-        reviewing: result?.reviewing || null
-      }
+      detail: { [tr('detailReason')]: reason, [tr('detailNext')]: nextStep },
+      technicalDetail: { reason, reviewing: result?.reviewing || null }
     });
     appendCompletionReport({
       conclusion: tx('This task did not start: Codex did not run and no files were written.', '这轮任务没有开始：Codex 没有运行，也没有写入文件。'),
-      status: 'blocked',
-      operations: [],
-      applyResults: [],
-      nextStep
+      status: 'blocked', operations: [], applyResults: [], nextStep
     });
-    const finishTitle = requireReviewing
-      ? tx('Not started: could not enable Track Changes', '未开始：无法开启留痕')
-      : tx('Not started: could not switch to Editing', '未开始：无法切换到 Editing');
+    const finishTitle = tx('Not started: could not switch to Editing', '未开始：无法切换到 Editing');
     await finishRunView(finishTitle, 'failed');
-    return {
-      ok: false,
-      reason,
-      reviewing: result?.reviewing || null
-    };
+    return { ok: false, reason, reviewing: result?.reviewing || null };
   }
 
   function buildSessionHistoryResult({ assistantMessage = '', syncOutcome = {}, syncChanges = [] } = {}) {
@@ -3424,10 +3384,6 @@
     autosizeTaskTextarea();
     syncComposerSendAvailability();
     renderPendingInputs();
-    scheduleMirrorPrefetch({
-      reason: 'composer-input',
-      delayMs: mirrorHealth?.PREFETCH_DEBOUNCE_MS || 1200
-    });
     updateSlashMenuForTaskInput();
     refreshCodexOverleafSkillsForSlashMenu().catch(() => {
       // The slash menu still works with the built-in install command when native skill listing fails.
@@ -4809,10 +4765,6 @@
         }
       });
     }
-    const reviewing = await ensureReviewingBeforeWrite(partitioned.safe, { requireReviewing: runRequireReviewing });
-    if (!reviewing.ok) {
-      return buildReviewingBlockedApplyResult(partitioned.safe, reviewing, partitioned.skipped);
-    }
     const applied = partitioned.safe.length
       ? await callPageBridge('applyOperations', {
         operations: partitioned.safe,
@@ -4831,91 +4783,6 @@
         ...getSkippedEntries(applied),
         ...partitioned.skipped
       ]
-    };
-  }
-
-  async function ensureReviewingBeforeWrite(operations = [], options = {}) {
-    const requireReviewing = typeof options.requireReviewing === 'boolean'
-      ? options.requireReviewing
-      : state?.requireReviewing === true;
-    if (!operations.length) {
-      return { ok: true, skipped: true };
-    }
-    const method = requireReviewing ? 'ensureReviewing' : 'ensureEditing';
-
-    appendRunEvent({
-      title: requireReviewing
-        ? tx('Verifying Overleaf Reviewing/Track Changes before writing.', '正在确认 Overleaf 已开启 Reviewing/Track Changes。')
-        : tx('Verifying Overleaf Editing mode before writing.', '正在确认 Overleaf 已切到 Editing 模式。'),
-      status: 'running'
-    });
-    // Thread runProjectId so the page-side dispatcher gates the toggle. Same
-    // intent as the pre-flight check above: do not flip Track Changes /
-    // Editing in a different project than the run is bound to.
-    const result = await callPageBridge(method, {
-      waitMs: 1800,
-      runProjectId: currentRunView?.runProjectId || ''
-    });
-    if (result?.ok) {
-      appendRunEvent({
-        title: requireReviewing
-          ? (result.activated
-            ? tx('Switched to Overleaf Reviewing/Track Changes. Upcoming writes will be tracked.', '已切到 Overleaf Reviewing/Track Changes，接下来写入会留痕。')
-            : tx('Overleaf Reviewing/Track Changes is on. Upcoming writes will be tracked.', '已确认 Overleaf Reviewing/Track Changes 正在开启，接下来写入会留痕。'))
-          : (result.activated
-            ? tx('Switched to Overleaf Editing mode. Upcoming writes will not use Track Changes.', '已切到 Overleaf Editing 模式，接下来写入不会使用 Track Changes。')
-            : tx('Overleaf Editing mode is on. Upcoming writes will not use Track Changes.', '已确认 Overleaf Editing 模式开启，接下来写入不会使用 Track Changes。')),
-        status: 'completed'
-      });
-      return result;
-    }
-
-    appendRunEvent({
-      title: requireReviewing
-        ? tx('Write blocked: Codex could not verify Overleaf Reviewing/Track Changes.', '已阻止写入：Codex 没能确认 Overleaf 正在用 Reviewing/Track Changes。')
-        : tx('Write blocked: Codex could not verify Overleaf Editing mode.', '已阻止写入：Codex 没能确认 Overleaf 正在用 Editing 模式。'),
-      status: 'failed',
-      detail: {
-        [tr('detailReason')]: localizeVisibleReason(result?.reason || (requireReviewing
-          ? tx('Overleaf did not return track changes status', 'Overleaf 没有返回留痕状态')
-          : tx('Overleaf did not return Editing mode status', 'Overleaf 没有返回 Editing 模式状态'))),
-        [tx('Status', '状态')]: result?.reviewing?.status || 'unknown'
-      }
-    });
-    return {
-      ok: false,
-      code: result?.code || (requireReviewing ? 'reviewing_not_enabled' : 'editing_not_confirmed'),
-      reason: result?.reason || (requireReviewing ? 'Reviewing/Track Changes was not enabled' : 'Editing mode was not confirmed'),
-      reviewing: result?.reviewing || null,
-      requireReviewing
-    };
-  }
-
-  function buildReviewingBlockedApplyResult(operations = [], reviewing = {}, extraSkipped = []) {
-    const blockedByEditing = reviewing?.code === 'editing_not_confirmed' || reviewing?.requireReviewing === false;
-    return {
-      ok: false,
-      applied: [],
-      skipped: [
-        ...(operations || []).map(operation => ({
-          operation,
-          result: {
-            ok: false,
-            code: blockedByEditing ? 'editing_not_confirmed' : 'reviewing_not_enabled',
-            reason: blockedByEditing
-              ? tx(
-                'Track is off, but Overleaf Editing mode was not verified before writing. Codex did not write this file.',
-                '已关闭“留痕”，但写入前没有确认 Overleaf 正在用 Editing 模式。Codex 没有写入这个文件。'
-              )
-              : tx(
-                'Track is enabled, but Overleaf Reviewing/Track Changes was not verified before writing. Codex did not write this file.',
-                '已开启“留痕”要求，但写入前没有确认 Overleaf 正在用 Reviewing/Track Changes。Codex 没有写入这个文件。'
-              )
-          }
-        })),
-        ...(extraSkipped || [])
-      ],
-      reviewing
     };
   }
 
@@ -5020,22 +4887,13 @@
 
   function formatProbeStatusBar(probe) {
     const readiness = getProbeRunReadiness(probe);
-    const reviewingOk = readiness.reviewingOk;
-    const editorWritable = readiness.editorWritable;
-
     if (state?.mode === 'ask') {
       return appendOtStatusToProbeStatus(`${formatModeLabel('ask')} · ${readiness.contextLabel}`);
     }
-    if (reviewingOk) {
-      const status = editorWritable
-        ? `${tr('canRun')} · ${readiness.contextLabel}`
-        : `${formatModeLabel(state?.mode)} · ${tr('validatingEditor')}`;
-      return appendOtStatusToProbeStatus(status);
-    }
-    if (readiness.contextReady) {
-      return appendOtStatusToProbeStatus(tr('needsReviewing'));
-    }
-    return appendOtStatusToProbeStatus(tr('needsReviewingAndFile'));
+    const status = readiness.editorWritable
+      ? `${tr('canRun')} · ${readiness.contextLabel}`
+      : `${formatModeLabel(state?.mode)} · ${tr('validatingEditor')}`;
+    return appendOtStatusToProbeStatus(status);
   }
 
   function appendOtStatusToProbeStatus(status) {
@@ -5060,8 +4918,8 @@
   }
 
   function isProbeReadyForCurrentMode(probe) {
-    const readiness = getProbeRunReadiness(probe);
-    return state?.mode === 'ask' || readiness.reviewingOk;
+    // Reviewing is verified only at the write boundary, not while idle.
+    return state?.mode === 'ask' || getProbeRunReadiness(probe).contextReady;
   }
 
   function getProbeRunReadiness(probe) {
@@ -5136,9 +4994,7 @@
 
   function formatProbeUserNotice(probe) {
     const readiness = getProbeRunReadiness(probe);
-    const reviewingOk = readiness.reviewingOk;
     const editorOk = readiness.editorOk;
-    const manualOverride = probe.reviewing?.status === 'manual-override';
     const editorWriteBlocked = probe.capabilities?.editor?.write === false;
 
     if (state?.mode === 'ask') {
@@ -5151,7 +5007,7 @@
       };
     }
 
-    if (reviewingOk && editorOk && editorWriteBlocked) {
+    if (editorOk && editorWriteBlocked) {
       return {
         ready: true,
         message: tx(
@@ -5161,37 +5017,14 @@
       };
     }
 
-    if (reviewingOk) {
-      return {
-        ready: true,
-        message: manualOverride
-          ? tx(
-            `Ready: you confirmed Overleaf Track Changes is on. Codex ${readiness.contextLabel}.`,
-            `可以运行：你已确认 Overleaf 已开启留痕，Codex ${readiness.contextLabel}。`
-          )
-          : tx(
-            `Ready: Codex verified Overleaf Reviewing/Track Changes is on and ${readiness.contextLabel}.`,
-            `可以运行：Codex 已确认 Overleaf Reviewing/Track Changes 已开启，并且${readiness.contextLabel}。`
-          )
-      };
-    }
-
-    if (readiness.contextReady) {
-      return {
-        ready: false,
-        message: tx(
-          `Not safe to write yet: Codex ${readiness.contextLabel}, but Overleaf Reviewing/Track Changes was not verified. Turn on Reviewing first, or disable Track below.`,
-          `还不能安全写入：Codex ${readiness.contextLabel}，但没有确认 Overleaf 已开启 Reviewing/Track Changes。请先打开 Reviewing，或关闭下方的安全检查。`
-        )
-      };
-    }
-
     return {
-      ready: false,
-      message: tx(
-        'Not safe to write yet: turn on Overleaf Reviewing/Track Changes first. Codex will read the whole project at run time; you can also use @file to focus on specific files.',
-        '还不能安全写入：请先在 Overleaf 打开 Reviewing/Track Changes；Codex 会在运行时读取整个项目，也可以用 @file 指定重点文件。'
-      )
+      ready: true,
+      message: state?.requireReviewing === true
+        ? tx(
+          'Ready: Overleaf stays in Editing while Codex works. Reviewing/Track Changes will be enabled only while applying changes.',
+          '可以运行：Codex 工作时 Overleaf 保持 Editing，仅在写入改动时临时开启 Reviewing/Track Changes。'
+        )
+        : tx('Ready: Codex will apply changes in Overleaf Editing mode.', '可以运行：Codex 将在 Overleaf Editing 模式下写入改动。')
     };
   }
 
@@ -5269,42 +5102,10 @@
     return null;
   }
 
-  async function resolveWarmMirrorReuse(project = {}, options = {}) {
-    const snapshotWarnings = options.snapshotWarnings || { blocking: [] };
-    const focusFiles = options.focusFiles || [];
-    const mode = options.mode || state.mode;
-    const partialSnapshot = Boolean(
-      snapshotWarnings.blocking?.some(warning => /Full project snapshot was not captured/i.test(warning))
-    );
-
-    if (!partialSnapshot && (mode === 'ask' || !focusFiles.length)) {
-      return { useExistingMirror: false };
-    }
-
-    const fileOverlays = buildSnapshotFileOverlays(project, focusFiles, { partialSnapshot });
-    if (partialSnapshot && !fileOverlays.length) {
-      return { useExistingMirror: false, reason: 'missing_overlay' };
-    }
-    if (focusFiles.length && !focusFiles.every(path => {
-      const normalized = normalizeSnapshotPath(path);
-      return fileOverlays.some(file => normalizeSnapshotPath(file.path) === normalized);
-    })) {
-      return { useExistingMirror: false, reason: 'missing_focus_overlay' };
-    }
-
-    const mirrorStatus = await getMirrorFreshness();
-    const mirrorHealth = Modules.MirrorHealth.classifyMirrorHealth(mirrorStatus);
-    if (!mirrorStatus?.exists || !mirrorHealth.reusable) {
-      return { useExistingMirror: false, reason: 'mirror_not_fresh', mirrorStatus };
-    }
-
-    return {
-      useExistingMirror: true,
-      fileOverlays,
-      mirrorStatus,
-      mirrorHealth,
-      partialSnapshot
-    };
+  async function resolveWarmMirrorReuse() {
+    // Even a recent mirror may miss edits to inactive/unfocused files. Each
+    // submitted request must use its freshly captured snapshot, never a TTL.
+    return { useExistingMirror: false, reason: 'sync_on_request' };
   }
 
   function buildSnapshotFileOverlays(project = {}, focusFiles = [], options = {}) {
@@ -6990,76 +6791,74 @@
   }
 
   async function acceptRun(runId) {
-    const run = findRunRecord(runId);
-    if (!run || !isTrackedChangeLifecycleRun(run)) {
-      return;
-    }
-    const status = run.trackedChangeStatus || '';
-    // pending and needs_review are both actionable per §7: needs_review means
-    // the prior attempt could not prove a clean post-action state, and the
-    // user is supposed to be able to retry after inspecting Overleaf.
-    if (status !== 'pending' && status !== 'needs_review') {
-      return;
-    }
-    if (!Array.isArray(run.undoTrackedChanges) || !run.undoTrackedChanges.length) {
-      return;
-    }
-    if (trackedChangeInFlight.get(runId)) {
-      return;
+    const session = (state.sessions || []).find(session =>
+      (session.runs || []).some(run => run.id === runId));
+    const sessionRuns = session?.id === state.activeSessionId
+      ? state.runs : session?.runs || state.runs || [];
+    const batch = WritebackSettlement.buildSessionAcceptBatch(
+      sessionRuns, runId, buildTrackedUndoPostFiles
+    );
+    if (!batch || batch.runs.some(run => trackedChangeInFlight.has(run.id))) return;
+    const run = batch.run;
+    for (const target of batch.runs) {
+      trackedChangeInFlight.set(target.id, 'accept');
+      refreshRunCardControls(target.id);
+      appendRunRecordEvent(target.id, {
+        title: tr('runAcceptTrackedStarted'),
+        status: 'running',
+        detail: { [tr('detailAccepted')]: formatTrackedChangeFiles(run.undoTrackedChanges) }
+      });
     }
 
-    trackedChangeInFlight.set(runId, 'accept');
-    refreshRunCardControls(runId);
-    appendRunRecordEvent(runId, {
-      title: tr('runAcceptTrackedStarted'),
-      status: 'running',
-      detail: { [tr('detailAccepted')]: formatTrackedChangeFiles(run.undoTrackedChanges) }
-    });
-
-    let result;
     try {
-      result = await callPageBridge('acceptTrackedChanges', {
+      const result = await callPageBridge('acceptTrackedChanges', {
         trackedChanges: run.undoTrackedChanges || [],
         expectedFiles: run.undoExpectedFiles || [],
-        postFiles: buildTrackedUndoPostFiles(run),
+        postFiles: batch.postFiles,
         appliedOperations: Array.isArray(run.appliedOperations) ? run.appliedOperations : [],
         runProjectId: getRunProjectIdForWriteback(run)
       });
-    } finally {
-      trackedChangeInFlight.delete(runId);
-    }
-    appendAcceptDiagnosticEvents(runId, Array.isArray(result.diagnostics) ? result.diagnostics : []);
-    appendRunRecordEvent(runId, {
-      title: tr('runAcceptTrackedResult', { applied: result.applied?.length || 0, skipped: result.skipped?.length || 0 }),
-      status: result.skipped?.length ? 'failed' : 'completed',
-      detail: {
-        [tr('detailAccepted')]: (result.applied || []).map(item => ({
-          [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
-          [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key
-        })),
-        [tr('detailSkipped')]: (result.skipped || []).map(item => ({
-          [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
-          [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key || '',
-          [tr('detailReason')]: formatBridgeResultReason(item.result, item.trackedChange?.path)
-        }))
-      }
-    });
-    if (result.ok === false) {
-      appendRunRecordEvent(runId, {
-        title: tr('runAcceptTrackedFailed'),
-        status: 'failed',
-        detail: {
-          [tr('detailReason')]: tr('runAcceptTrackedFailedReason')
-        }
+      WritebackSettlement.attachAcceptNotVerifiedFailure(run, result, {
+        buildFailure: buildContentFailure
       });
-      if (!WritebackSettlement.isSuccessfulTrackedChangeSettlement(result)) {
-        refreshRunCardControls(runId);
+      for (const target of batch.runs) {
+        const runId = target.id;
+        appendAcceptDiagnosticEvents(runId, Array.isArray(result.diagnostics) ? result.diagnostics : []);
+        appendRunRecordEvent(runId, {
+          title: tr('runAcceptTrackedResult', { applied: result.applied?.length || 0, skipped: result.skipped?.length || 0 }),
+          status: result.skipped?.length ? 'failed' : 'completed',
+          detail: {
+            [tr('detailAccepted')]: (result.applied || []).map(item => ({
+              [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
+              [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key
+            })),
+            [tr('detailSkipped')]: (result.skipped || []).map(item => ({
+              [tr('detailFile')]: item.trackedChange?.path || tr('unknownFile'),
+              [tr('detailRecord')]: item.trackedChange?.label || item.trackedChange?.id || item.trackedChange?.key || '',
+              [tr('detailReason')]: formatBridgeResultReason(item.result, item.trackedChange?.path)
+            }))
+          }
+        });
+        if (result.ok === false) {
+          appendRunRecordEvent(runId, {
+            title: tr('runAcceptTrackedFailed'),
+            status: 'failed',
+            detail: {
+              [tr('detailReason')]: tr('runAcceptTrackedFailedReason')
+            }
+          });
+          if (!WritebackSettlement.isSuccessfulTrackedChangeSettlement(result)) {
+            refreshRunCardControls(runId);
+          }
+        }
+        await applyTrackedChangeSettlement(runId, 'accept', result, { requireComplete: batch.runs.length > 1 });
+      }
+    } finally {
+      for (const target of batch.runs) {
+        trackedChangeInFlight.delete(target.id);
+        refreshRunCardControls(target.id);
       }
     }
-    WritebackSettlement.attachAcceptNotVerifiedFailure(run, result, {
-      buildFailure: buildContentFailure
-    });
-    applyTrackedChangeSettlement(runId, 'accept', result);
   }
 
   function getRunProjectIdForWriteback(run) {
@@ -7103,10 +6902,11 @@
     );
   }
 
-  function applyTrackedChangeSettlement(runId, kind, result) {
+  function applyTrackedChangeSettlement(runId, kind, result, options = {}) {
     const run = findRunRecord(runId);
     const settlement = WritebackSettlement.settleTrackedChangeLifecycle({
       kind,
+      requireComplete: options.requireComplete === true,
       run,
       result,
       failureReasons: FailureReasons

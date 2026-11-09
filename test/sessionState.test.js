@@ -100,6 +100,38 @@ test('normalizes missing panel state with defaults and a session id', () => {
   assert.equal(state.activeSessionId, state.session.id);
 });
 
+test('normalizing more than 20 sessions preserves their order and the oldest active session', () => {
+  const sessions = Array.from({ length: 100 }, (_, index) => createSession({
+    task: `Task ${index}`,
+    runs: [{ id: `run_${index}`, task: `Task ${index}`, status: 'completed' }]
+  }));
+  const state = normalizePanelState({ sessions, activeSessionId: sessions[0].id });
+
+  assert.deepEqual(state.sessions.map(session => session.id), sessions.map(session => session.id));
+  assert.equal(state.activeSessionId, sessions[0].id);
+  assert.equal(state.runs[0].id, 'run_0');
+});
+
+for (const aggressive of [false, true]) {
+  test(`storage round-trip preserves all 100 sessions (aggressive: ${aggressive})`, () => {
+    const sessions = Array.from({ length: 100 }, (_, index) => createSession({
+      task: `Task ${index}`,
+      codexThreadId: `thread_${index}`,
+      runs: [{ id: `run_${index}`, task: `Task ${index}`, status: 'completed' }]
+    }));
+    const input = { sessions, activeSessionId: sessions[0].id };
+    const compact = prepareStateForStorage(input, { aggressive });
+    const restored = normalizePanelState(JSON.parse(JSON.stringify(compact)));
+
+    for (const state of [compact, restored]) {
+      assert.deepEqual(state.sessions.map(session => session.id), sessions.map(session => session.id));
+      assert.deepEqual(state.sessions.map(session => session.codexThreadId), sessions.map(session => session.codexThreadId));
+      assert.deepEqual(state.sessions.map(session => session.runs[0].id), sessions.map(session => session.runs[0].id));
+      assert.equal(state.activeSessionId, sessions[0].id);
+    }
+  });
+}
+
 test('normalizes Codex skill loading toggles as global panel preferences', () => {
   const state = normalizePanelState({
     preloadProjectContext: false,

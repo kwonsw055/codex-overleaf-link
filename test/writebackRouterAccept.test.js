@@ -227,6 +227,44 @@ test('acceptTrackedChanges editor-undoes to pre-write content then replays post-
   assert.equal(harness.state.markedSourceEdited, true);
 });
 
+test('accepting consecutive pending runs preserves their final combined content', async () => {
+  const Settlement = require('../extension/src/shared/writebackSettlement');
+  const before = 'Intro.\nThe fox.\nEnd.\n';
+  const middle = 'Intro.\nThe brown fox.\nEnd.\n';
+  const after = 'Intro.\nThe quick brown fox.\nEnd.\n';
+  const runs = [
+    { id: 'first', pre: before, post: middle },
+    { id: 'second', pre: middle, post: after }
+  ].map(run => ({
+    ...run, runProjectId: 'test-project', trackedChangeStatus: 'pending',
+    undoTrackedChanges: [{ key: run.id, path: 'main.tex' }],
+    undoExpectedFiles: [{ path: 'main.tex', content: run.pre }],
+    appliedOperations: [{ type: 'edit', path: 'main.tex', patches: [{
+      from: 11, to: 11, expected: '', insert: run.id === 'first' ? 'brown ' : 'quick '
+    }] }]
+  }));
+  const batch = Settlement.buildSessionAcceptBatch(runs, 'second', run => [
+    { path: 'main.tex', content: run.post }
+  ]);
+  const harness = createAcceptHarness({ preContent: before, postContent: after, undoHistory: [middle, before] });
+  const result = await harness.router.acceptTrackedChanges({
+    trackedChanges: batch.run.undoTrackedChanges,
+    expectedFiles: batch.run.undoExpectedFiles,
+    postFiles: batch.postFiles,
+    appliedOperations: batch.run.appliedOperations
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(harness.state.editorText, after);
+  assert.equal(harness.state.undoClicks, 2);
+  assert.equal(harness.state.writes.length, 1);
+  assert.equal(harness.state.writes[0].kind, 'patches');
+  for (const run of runs) {
+    assert.equal(Settlement.settleTrackedChangeLifecycle({
+      kind: 'accept', run, result, requireComplete: true
+    }).decision, 'accepted');
+  }
+});
+
 test('acceptTrackedChanges switches to Editing mode before the replay and restores Reviewing after', async () => {
   const harness = createAcceptHarness({
     preContent: 'before\n',

@@ -29,6 +29,9 @@ function createHarness(options = {}) {
   const context = vm.createContext({ window, setTimeout: window.setTimeout, clearTimeout: window.clearTimeout });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../extension/src/content/otWarmMirror.js'), 'utf8'), context);
   const mirror = window.CodexOverleafOtWarmMirror.create({
+    // Exercise the retained legacy controller separately from production,
+    // whose request-only default is covered below.
+    backgroundSyncEnabled: true,
     otWarmMirrorController: Controller,
     getState: () => state, setState: next => { state = next; },
     getCurrentProjectId: () => projectId, getPanel: () => null,
@@ -62,6 +65,44 @@ test('OT startup accepts the actual JSON page-bridge response and starts polling
   assert.equal(timers.size, 1);
   await mirror.pauseOtWarmMirror('running');
   assert.equal(timers.size, 0);
+});
+
+test('request-only default ignores restored OT opt-in and schedules no idle sync', async () => {
+  const requests = [];
+  const h = createHarness({
+    backgroundSyncEnabled: undefined,
+    syncCustomInstructionsEditorForProject() {},
+    mirrorHealth: { shouldStartPrefetch: () => ({ ok: true }) },
+    sendBackgroundNative: async request => { requests.push(request.method); throw new Error('Unexpected idle sync'); }
+  });
+  // Simulate startup, opening the panel, composing a prompt, and settlement.
+  await h.mirror.syncOtWarmMirrorController();
+  h.mirror.scheduleMirrorPrefetch({ reason: 'cold-start', delayMs: 2500 });
+  h.mirror.scheduleMirrorPrefetch({ reason: 'composer-input', delayMs: 1200 });
+  await h.mirror.resumeOtWarmMirror('run-settled');
+  h.setContent('Edited while Codex is idle');
+  assert.equal(h.mirror.isExperimentalOtEnabled(), false);
+  assert.equal(h.listeners.has('input'), false);
+  assert.equal(h.observer.getStatus().running, false);
+  assert.equal(h.timers.size, 0);
+  assert.deepEqual(requests, []);
+  h.setProject('second');
+  await h.mirror.syncOtWarmMirrorController();
+  assert.equal(h.listeners.has('input'), false);
+  assert.equal(h.timers.size, 0);
+});
+
+test('request-only send bypasses recent mirrors and requires a fresh snapshot', async () => {
+  const h = createHarness({
+    backgroundSyncEnabled: undefined,
+    getMirrorFreshness() { throw new Error('Must not trust a mirror TTL'); },
+    callPageBridge() { throw new Error('The run owns the fresh full snapshot'); }
+  });
+  for (const mode of ['ask', 'edit']) {
+    const result = await h.mirror.resolveWarmRunStart({ mode, focusFiles: ['main.tex'] });
+    assert.equal(result.useExistingMirror, false);
+    assert.equal(result.reason, 'sync_on_request');
+  }
 });
 
 test('an unavailable editor read cannot become an empty-file OT deletion', () => {

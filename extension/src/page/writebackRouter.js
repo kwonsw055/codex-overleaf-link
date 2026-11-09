@@ -357,39 +357,68 @@
     const hasOperations = (operations || []).length > 0;
     const trackReviewingChanges = options.requireReviewing === true && hasOperations;
     let reviewingPolicy = null;
-    if (options.requireReviewing === true && hasOperations) {
-      const reviewing = await ensureReviewing({ waitMs: 1800 });
-      if (!reviewing.ok) {
-        return buildReviewingRequiredBlockedResult(operations, reviewing);
+    let result;
+    try {
+      if (trackReviewingChanges) {
+        const reviewing = await ensureReviewing({ waitMs: 1800 });
+        if (!reviewing.ok) {
+          result = buildReviewingRequiredBlockedResult(operations, reviewing);
+        }
+      } else if (options.requireEditing === true && hasOperations) {
+        const editing = await ensureEditing({ waitMs: 1800 });
+        if (!editing.ok) {
+          return buildEditingRequiredBlockedResult(operations, editing);
+        }
+        reviewingPolicy = {
+          policy: 'editing-write',
+          disabled: editing.activated === true,
+          leftEditing: true,
+          reason: editing.activated ? 'switched_to_editing_before_write' : 'editing_already_confirmed',
+          disable: summarizeReviewingToggleResult({
+            ok: true,
+            changed: editing.activated === true,
+            enabled: false,
+            reason: editing.activated ? 'Switched to Editing before untracked write.' : 'Editing already confirmed before untracked write.'
+          })
+        };
       }
-    } else if (options.requireEditing === true && hasOperations) {
-      const editing = await ensureEditing({ waitMs: 1800 });
-      if (!editing.ok) {
-        return buildEditingRequiredBlockedResult(operations, editing);
+      if (!result) {
+        result = await applyOperationsCore(operations, { ...options, trackReviewingChanges });
       }
-      reviewingPolicy = {
-        policy: 'editing-write',
-        disabled: editing.activated === true,
-        leftEditing: true,
-        reason: editing.activated ? 'switched_to_editing_before_write' : 'editing_already_confirmed',
-        disable: summarizeReviewingToggleResult({
-          ok: true,
-          changed: editing.activated === true,
-          enabled: false,
-          reason: editing.activated ? 'Switched to Editing before untracked write.' : 'Editing already confirmed before untracked write.'
-        })
-      };
+    } finally {
+      // Include failed activation, skipped writes, exceptions and cancellation.
+      // Do not leave Reviewing enabled while Codex or the user continues work.
+      if (trackReviewingChanges) {
+        const editing = await returnToEditingAfterWrite(options);
+        reviewingPolicy = {
+          policy: 'temporary-reviewing',
+          disabled: editing.changed === true,
+          leftEditing: editing.ok === true,
+          reason: editing.ok ? 'left_editing_after_write' : 'editing_restore_failed',
+          disable: summarizeReviewingToggleResult(editing)
+        };
+      }
     }
-    const result = await applyOperationsCore(operations, {
-      ...options,
-      trackReviewingChanges
-    });
-    return reviewingPolicy
-      ? {
-        ...result,
-        reviewingPolicy
+    return reviewingPolicy ? { ...result, reviewingPolicy } : result;
+  }
+
+  async function returnToEditingAfterWrite(options = {}) {
+    try {
+      // A run may end after an SPA project navigation. Never switch the mode
+      // of an unrelated project while cleaning up the previous write.
+      if (options.runProjectId) {
+        const guard = window.CodexOverleafWriteGuard?.create({ window, document: window.document, treeOperations });
+        const blocked = await guard?.runWriteGuard({ runProjectId: options.runProjectId });
+        if (blocked) {
+          return blocked.skipped?.[0]?.result || { ok: false, code: 'aborted_project_changed' };
+        }
       }
-      : result;
+      return await setReviewingEnabled(false, { waitMs: 1800 });
+    } catch (error) {
+      // Preserve the write result and Undo information even if mode cleanup
+      // fails. The content-side presenter surfaces this separate warning.
+      return { ok: false, code: 'editing_restore_failed', reason: error?.message || String(error) };
+    }
   }
 
   async function applyOperationsWithNoTraceUndo(operations, options = {}) {

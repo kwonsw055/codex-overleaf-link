@@ -11,6 +11,9 @@
   // runtime reads it through the exported accessors and clears it on project
   // navigation via clearMirrorPrefetchTimer()/releaseOtWarmMirrorProject().
   function create(deps = {}) {
+    // Request-time snapshots are the default. Persisted OT preferences must
+    // not restart background observation in the request-only runtime.
+    const backgroundSyncEnabled = deps.backgroundSyncEnabled === true;
     const {
       otWarmMirrorController,
       runController,
@@ -114,7 +117,7 @@
   }
 
   function isExperimentalOtEnabledForProject(projectId) {
-    return getState()?.experimentalOtByProject?.[projectId] === true;
+    return backgroundSyncEnabled && getState()?.experimentalOtByProject?.[projectId] === true;
   }
 
   function setExperimentalOtEnabled(enabled) {
@@ -130,7 +133,7 @@
       ...getState(),
       experimentalOtByProject: {
         ...normalizeExperimentalOtByProject(getState()?.experimentalOtByProject),
-        [projectId]: enabled === true
+        [projectId]: backgroundSyncEnabled && enabled === true
       }
     });
   }
@@ -699,6 +702,7 @@
   }
 
   function scheduleMirrorPrefetch(options = {}) {
+    if (!backgroundSyncEnabled) return;
     syncMirrorPrefetchStateForProject();
     if (!mirrorHealth?.shouldStartPrefetch) {
       return;
@@ -726,6 +730,7 @@
   }
 
   async function syncMirrorPrefetch(options = {}) {
+    if (!backgroundSyncEnabled) return { ok: false, skipped: true, reason: 'sync_on_request' };
     syncMirrorPrefetchStateForProject();
     const projectId = getCurrentProjectId();
     const now = Date.now();
@@ -822,6 +827,7 @@
   }
 
   async function resolveWarmRunStart(taskContext = {}) {
+    if (!backgroundSyncEnabled) return { useExistingMirror: false, reason: 'sync_on_request' };
     const projectId = getCurrentProjectId();
     const focusFiles = taskContext.focusFiles || [];
     const mode = taskContext.mode || getState()?.mode;

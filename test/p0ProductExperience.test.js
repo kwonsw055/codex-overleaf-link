@@ -1063,19 +1063,11 @@ test('task run blocks unfocused partial project snapshots before they can rewrit
   assert.match(contentScript, /只读到你选择的上下文文件/);
 });
 
-test('fresh warm mirror can carry a run when Overleaf only returns a partial snapshot', () => {
+test('request-only runs cannot fill a partial snapshot with a TTL-based mirror', () => {
   const contentScript = getContentScriptSource();
-  const i18n = fs.readFileSync(
-    path.join(__dirname, '../extension/src/shared/i18n.js'),
-    'utf8'
-  );
-
-  assert.match(contentScript, /async function resolveWarmMirrorReuse/);
-  assert.match(contentScript, /Full project snapshot was not captured/);
-  assert.match(contentScript, /classifyMirrorHealth\(mirrorStatus\)/);
-  assert.match(contentScript, /mirrorHealth\.reusable/);
-  assert.match(contentScript, /tr\('warmMirrorPartialOverlayTitle'\)/);
-  assert.match(i18n, /没有读到完整 Overleaf 项目，但本地 workspace 刚同步过/);
+  const reuse = extractFunction(contentScript, 'resolveWarmMirrorReuse');
+  assert.match(reuse, /useExistingMirror: false/);
+  assert.doesNotMatch(reuse, /getMirrorFreshness|classifyMirrorHealth/);
   assert.match(contentScript, /mergeProjectWithSyncChangeBaseFiles\(project,\s*syncChanges\)/);
 });
 
@@ -1139,7 +1131,7 @@ test('empty or malformed apply results do not trigger save verification', () => 
 test('malformed skipped apply result entries are not treated as partial writeback', () => {
   const contentScript = getContentScriptSource();
   const applyBody = contentScript.match(/async function applySyncChangesToOverleaf[\s\S]*?\n  async function verifyPostWriteSaveState/)?.[0] || '';
-  const applyTaskBody = contentScript.match(/async function applyTaskOperations[\s\S]*?\n  async function ensureReviewingBeforeWrite/)?.[0] || '';
+  const applyTaskBody = extractFromContentScript('applyTaskOperations');
   const recordUndoBody = contentScript.match(/function recordUndoFromApply\(project, applyResult\) \{[\s\S]*?\n  function normalizeApplyTrackedChanges/)?.[0] || '';
   const helperBody = contentScript.match(/function getSkippedEntries\(applied = \{\}\) \{[\s\S]*?\n  \}/)?.[0] || '';
 
@@ -1871,13 +1863,13 @@ test('write paths enforce Overleaf Reviewing before applying changes when reques
   const applySyncBody = extractFromContentScript('applySyncChangesToOverleaf');
   const applyTaskBody = extractFromContentScript('applyTaskOperations');
 
-  assert.match(contentScript, /async function ensureReviewingBeforeWrite/);
+  assert.doesNotMatch(contentScript, /async function ensureReviewingBeforeWrite/);
   assert.match(applySyncBody, /const runRequireReviewing = typeof options\.requireReviewing === 'boolean'/);
-  assert.match(applySyncBody, /await ensureReviewingBeforeWrite\(operations,\s*\{\s*requireReviewing:\s*runRequireReviewing\s*\}\)/);
+  assert.doesNotMatch(applySyncBody, /ensureReviewingBeforeWrite/);
   assert.match(applySyncBody, /requireReviewing:\s*runRequireReviewing/);
   assert.match(applySyncBody, /requireEditing:\s*!runRequireReviewing/);
   assert.doesNotMatch(applySyncBody, /requireReviewing:\s*state\.requireReviewing === true/);
-  assert.match(applyTaskBody, /await ensureReviewingBeforeWrite\(partitioned\.safe,\s*\{\s*requireReviewing:\s*runRequireReviewing\s*\}\)/);
+  assert.doesNotMatch(applyTaskBody, /ensureReviewingBeforeWrite/);
   assert.match(applyTaskBody, /requireReviewing:\s*runRequireReviewing/);
   assert.match(applyTaskBody, /requireEditing:\s*!runRequireReviewing/);
   assert.doesNotMatch(applyTaskBody, /requireReviewing:\s*state\.requireReviewing === true/);
@@ -1895,7 +1887,7 @@ test('write paths enforce Overleaf Reviewing before applying changes when reques
   assert.match(writebackRouter, /buildEditingRequiredBlockedResult/);
 });
 
-test('write tasks preflight Reviewing or Editing before syncing or starting local Codex', () => {
+test('write tasks stay in Editing before syncing or starting local Codex', () => {
   const contentScript = getContentScriptSource();
   const runTaskBody = contentScript.match(/async function runTask\([^)]*\) \{[\s\S]*?\n  async function handleTaskResult/)?.[0] || '';
   const preflightIndex = runTaskBody.indexOf('preflightWriteSafety({');
@@ -1912,14 +1904,10 @@ test('write tasks preflight Reviewing or Editing before syncing or starting loca
   assert.match(runTaskBody, /const submittedRequireReviewing = executionSnapshot\.requireReviewing === true/);
   assert.match(runTaskBody, /preflightWriteSafety\(\{\s*mode:\s*submittedMode,\s*requireReviewing:\s*submittedRequireReviewing\s*\}\)/);
   assert.match(preflightBody, /const mode = options\.mode \|\| state\.mode/);
-  assert.match(preflightBody, /const requireReviewing = typeof options\.requireReviewing === 'boolean'/);
   assert.match(preflightBody, /mode === 'ask'/);
-  assert.match(preflightBody, /const method = requireReviewing \? 'ensureReviewing' : 'ensureEditing'/);
-  assert.match(preflightBody, /callPageBridge\(method/);
-  assert.match(preflightBody, /任务未开始：无法开启 Overleaf 留痕/);
+  assert.match(preflightBody, /callPageBridge\('ensureEditing'/);
+  assert.doesNotMatch(preflightBody, /callPageBridge\('ensureReviewing'/);
   assert.match(preflightBody, /任务未开始：无法切换到 Overleaf Editing/);
-  assert.match(preflightBody, /const finishTitle = requireReviewing/);
-  assert.match(preflightBody, /tx\('Not started: could not enable Track Changes', '未开始：无法开启留痕'\)/);
   assert.match(preflightBody, /tx\('Not started: could not switch to Editing', '未开始：无法切换到 Editing'\)/);
   assert.match(preflightBody, /finishRunView\(finishTitle, 'failed'\)/);
 });
@@ -2003,14 +1991,11 @@ test('read-only native discovery and diagnostics bypass the compatibility run ga
   assert.doesNotMatch(inspectBody, /ensureNativeCompatibilityForMethod/);
 });
 
-test('write preflight gives natural feedback for automatic Reviewing or Editing activation', () => {
+test('write preflight gives natural feedback for keeping Editing enabled', () => {
   const contentScript = getContentScriptSource();
   const preflightBody = contentScript.match(/async function preflightWriteSafety\([^)]*\) \{[\s\S]*?\n  async function handleTaskResult/)?.[0] || '';
 
-  assert.match(preflightBody, /正在确认 Overleaf 留痕状态/);
   assert.match(preflightBody, /正在确认 Overleaf Editing 模式/);
-  assert.match(preflightBody, /已开启 Overleaf 留痕，开始处理任务/);
-  assert.match(preflightBody, /Overleaf 留痕已经开启，开始处理任务/);
   assert.match(preflightBody, /已切到 Overleaf Editing，开始处理任务/);
   assert.match(preflightBody, /Overleaf 已在 Editing 模式，开始处理任务/);
   assert.match(preflightBody, /你可能没有权限，或 Overleaf 当前页面没有暴露切换入口/);
@@ -3069,7 +3054,7 @@ test('acceptRun drives the run through the decisive §7 settlement reducer, with
   assert.match(contentScript, /function applyTrackedChangeSettlement\(/);
 
   const acceptRunBody = contentScript.match(/async function acceptRun\(runId\) \{[\s\S]*?\n  (?:async )?function /)?.[0] || '';
-  assert.match(acceptRunBody, /applyTrackedChangeSettlement\(runId,\s*'accept',\s*result\)/);
+  assert.match(acceptRunBody, /applyTrackedChangeSettlement\(runId,\s*'accept',\s*result,\s*\{ requireComplete: batch\.runs\.length > 1 \}\)/);
   const settlementBody = contentScript.match(/function applyTrackedChangeSettlement\([\s\S]*?\n  function /)?.[0] || '';
   assert.match(settlementBody, /WritebackSettlement\.settleTrackedChangeLifecycle/);
   assert.match(settlementBody, /WritebackSettlement\.applySettlementTransition/);
@@ -3262,7 +3247,7 @@ test('acceptRun settlement: failed or unverified page action remains actionable 
   // The settlement helper, not the unconditional terminal call, is what
   // acceptRun invokes after the page bridge returns ok.
   const acceptRunBody = contentScript.match(/async function acceptRun\(runId\) \{[\s\S]*?\n  (?:async )?function /)?.[0] || '';
-  assert.match(acceptRunBody, /applyTrackedChangeSettlement\(runId,\s*'accept',\s*result\)/);
+  assert.match(acceptRunBody, /applyTrackedChangeSettlement\(runId,\s*'accept',\s*result,\s*\{ requireComplete: batch\.runs\.length > 1 \}\)/);
   assert.doesNotMatch(acceptRunBody, /applyTerminalTrackedChangeStatus\(runId,\s*'accepted'\)/);
   assert.equal(
     WritebackSettlement.settleTrackedChangeLifecycle({
@@ -4203,6 +4188,7 @@ test('experimental OT sync ignores stale responses and reverts failed starts to 
 test('experimental OT input persistence does not leak checked state after project change', () => {
   const contentScript = getContentScriptSource();
   const harness = Function(`
+    const backgroundSyncEnabled = true; // Retained legacy controller behavior.
     let currentProjectId = 'project_a';
     let currentOtStatus = 'observing';
     let lastExperimentalOtProjectId = 'project_a';

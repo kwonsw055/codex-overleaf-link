@@ -54,9 +54,9 @@ test('project snapshot action lives in the diagnostics menu instead of the heade
   // v1.7.5: the dual hidden-checkbox + button control became a single visible
   // switch (the checkbox itself); the confirm-before-enable click interceptor
   // binds to it directly.
-  assert.match(settingsPanel, /data-experimental-ot\b/);
+  assert.doesNotMatch(settingsPanel, /data-experimental-ot\b/);
   assert.doesNotMatch(settingsPanel, /data-experimental-ot-toggle/);
-  assert.match(settingsPanel, /<span data-i18n="experimentalOtMenuTitle">OT Mirror<\/span>/);
+  assert.doesNotMatch(settingsPanel, /<span data-i18n="experimentalOtMenuTitle">OT Mirror<\/span>/);
   assert.match(settingsPanel, /data-language-select/);
   assert.match(contentScript, /function applyLocaleToPanel\(/);
   assert.match(diagnosticsController, /function inspectNativeEnvironment\(/);

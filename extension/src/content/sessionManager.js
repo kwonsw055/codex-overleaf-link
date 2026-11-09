@@ -76,29 +76,12 @@
     }
     readPanelInputs();
     // Reuse an already-empty, idle active session instead of minting a ghost.
-    // Empty sessions are invisible in the list yet still consume the storage cap
-    // (slice(-20) / maxSessions), so spamming "New Session" could silently evict
-    // real history. Only mint when the current session holds real work.
+    // Empty sessions are invisible in the list. Only mint when the current
+    // session holds real work.
     const active = getActiveSession(getState());
     if (active && !isDisplayableSession(active) && !isSessionRunning(active)) {
       getPanel().querySelector('[data-task]')?.focus();
       return;
-    }
-    // The 21st session silently and PERMANENTLY evicts the oldest one
-    // (slice(-20) + the storage retention diff physically deletes its
-    // record). Never let that happen without consent.
-    const currentSessions = getState().sessions || [];
-    if (currentSessions.length >= 20) {
-      const oldest = currentSessions[0];
-      const evictionApproved = await showPluginConfirm({
-        title: tr('sessionEvictTitle'),
-        message: tr('sessionEvictMessage', { title: String(oldest?.title || '').slice(0, 40) || '…' }),
-        confirmLabel: tr('sessionEvictConfirm'),
-        destructive: true
-      });
-      if (!evictionApproved) {
-        return;
-      }
     }
     const session = createSession({
       mode: getState().mode,
@@ -110,7 +93,7 @@
     });
     setState(normalizePanelState({
       ...getState(),
-      sessions: [...(getState().sessions || []), session].slice(-20),
+      sessions: [...(getState().sessions || []), session],
       activeSessionId: session.id
     }));
     applyStateToPanel();

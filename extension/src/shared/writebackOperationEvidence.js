@@ -113,6 +113,41 @@
     };
   }
 
+  // Runs are in session order. Accept includes unresolved predecessors only;
+  // terminal runs, forked history and another project's refs never join it.
+  function buildSessionAcceptBatch(runs, runId, buildPostFiles) {
+    const index = (runs || []).findIndex(run => run?.id === runId);
+    if (index < 0) return null;
+    const selected = runs[index];
+    const actionable = run => run && run.forkSnapshot !== true
+      && run.undoStatus !== 'applied'
+      && run.runProjectId === selected.runProjectId
+      && ['pending', 'needs_review'].includes(run.trackedChangeStatus)
+      && Array.isArray(run.undoTrackedChanges) && run.undoTrackedChanges.length > 0;
+    if (!actionable(selected)) return null;
+    const targets = runs.slice(0, index + 1).filter(actionable);
+    const expectedByPath = new Map();
+    const postByPath = new Map();
+    for (const run of targets) {
+      for (const file of run.undoExpectedFiles || []) {
+        if (!expectedByPath.has(file.path)) expectedByPath.set(file.path, file);
+      }
+      for (const file of buildPostFiles(run)) postByPath.set(file.path, file);
+    }
+    return {
+      runs: targets,
+      run: {
+        ...selected,
+        undoTrackedChanges: normalizeTrackedChanges(targets.flatMap(run => run.undoTrackedChanges)),
+        undoExpectedFiles: Array.from(expectedByPath.values()),
+        // Patches from successive runs use different offsets/baselines. The
+        // legacy replay must derive its patch from the combined checkpoints.
+        appliedOperations: targets.length === 1 ? selected.appliedOperations : []
+      },
+      postFiles: Array.from(postByPath.values())
+    };
+  }
+
   function normalizeTrackedChanges(value) {
     const normalized = [];
     const seen = new Set();
@@ -146,6 +181,7 @@
   }
 
   return {
+    buildSessionAcceptBatch,
     normalizeFailure,
     normalizeOperationEvidence,
     normalizeTrackedChanges

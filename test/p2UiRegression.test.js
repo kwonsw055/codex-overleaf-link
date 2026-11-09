@@ -188,7 +188,7 @@ function toggleHarness(enabled) {
   const schedule = (callback, delay) => delay === 0 ? setTimeout(callback, 0) : null;
   const api = browserFactory(sources.ot, 'CodexOverleafOtWarmMirror', {
     window: { setTimeout: schedule, clearTimeout }, setTimeout: schedule, clearTimeout
-  }).create({ otWarmMirrorController: OtController, getState: () => state, setState: value => { state = value; },
+  }).create({ backgroundSyncEnabled: true, otWarmMirrorController: OtController, getState: () => state, setState: value => { state = value; },
     getPanel: () => panel, getCurrentProjectId: () => project, getCurrentRunView: () => null,
     closeDiagnosticsMenu: noop, showPluginConfirm: () => confirm(), showPluginToast: noop,
     tr: key => key, tx: en => en, updateProbeStatusOtSuffix: noop, saveStateSoon: noop,

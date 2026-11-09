@@ -2,8 +2,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 const { extractFunction } = require('./_helpers/extractFunction');
-const { createSession, normalizePanelState } = require('../extension/src/shared/sessionState');
+const SessionState = require('../extension/src/shared/sessionState');
+const { createSession, normalizePanelState } = SessionState;
 
 const repo = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 
@@ -35,6 +37,48 @@ test('startNewSession reuses an empty idle active session instead of minting a g
   assert.match(body, /!isDisplayableSession\(active\)\s*&&\s*!isSessionRunning\(active\)/);
   assert.match(body, /\[data-task\]'\)\?\.focus\(\)/);
 });
+
+for (const count of [20, 100]) {
+  test(`creating session ${count + 1} preserves existing sessions without an eviction prompt`, async () => {
+    const sessions = Array.from({ length: count }, (_, index) => createSession({
+      task: `Task ${index}`,
+      runs: [{ id: `run_${index}`, task: `Task ${index}`, status: 'completed' }]
+    }));
+    let state = normalizePanelState({ sessions, activeSessionId: sessions.at(-1).id });
+    let savedState;
+    const window = {};
+    vm.runInNewContext(repo('extension/src/content/sessionManager.js'), { window, document: {} });
+    const manager = window.CodexOverleafSessionManager.create({
+      SessionState,
+      SessionMenuView: { create: () => ({}) },
+      getState: () => state,
+      setState: next => { state = structuredClone(next); },
+      getPanel: () => ({ querySelector: () => ({ focus() {} }) }),
+      readPanelInputs() {},
+      applyStateToPanel() {},
+      saveState: async () => { savedState = structuredClone(state); },
+      tr: key => key,
+      showPluginConfirm: async () => assert.fail('Creating an idle session must not prompt for eviction')
+    });
+
+    await manager.startNewSession();
+
+    assert.equal(state.sessions.length, count + 1);
+    assert.deepEqual(state.sessions.slice(0, count).map(session => session.id), sessions.map(session => session.id));
+    assert.equal(state.sessions[0].runs[0].id, 'run_0');
+    assert.equal(state.activeSessionId, state.sessions.at(-1).id);
+    assert.deepEqual(savedState, state);
+
+    const newSessionId = state.activeSessionId;
+    await manager.startNewSession();
+    assert.equal(state.sessions.length, count + 1, 'the active empty session is still reused');
+    assert.equal(state.activeSessionId, newSessionId);
+
+    await manager.switchSession(sessions[0].id);
+    assert.equal(state.activeSessionId, sessions[0].id, 'the oldest session remains accessible');
+    assert.equal(state.runs[0].id, 'run_0');
+  });
+}
 
 test('session management lives in the Sessions list instead of a duplicate header bar', () => {
   const renderer = repo('extension/src/content/panelRenderer.js');

@@ -352,10 +352,9 @@
       if (!isLikelyEditorInputTarget(target)) {
         return;
       }
-      const CompileAdapter = pageWindow.CodexOverleafCompileAdapter;
-      if (!CompileAdapter?.isCompilableFile(deps.getActiveFilePath?.())) {
-        return;
-      }
+      // Conservatively invalidate compile freshness on any source-editor edit.
+      // Resolving the current path here traverses the project tree on every
+      // keystroke; file identity is only needed when a request reads/writes it.
       markSourceEdited();
     }
 

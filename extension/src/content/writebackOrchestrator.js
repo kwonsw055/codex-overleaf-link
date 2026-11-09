@@ -49,8 +49,6 @@
   let partitionUnsafeProjectPathOperations;
   let evaluateGovernedOperations;
   let buildGovernanceSkippedApplyResult;
-  let buildReviewingBlockedApplyResult;
-  let ensureReviewingBeforeWrite;
   let confirmBinaryOperations;
   let compileAdapter;
   let filterSyncChangesByOperations;
@@ -248,41 +246,6 @@
     }
 
     appendOperationsPreview(operations, tx('Sync local Codex changes to Overleaf', '同步本地 Codex 改动到 Overleaf'));
-    const reviewing = await ensureReviewingBeforeWrite(operations, { requireReviewing: runRequireReviewing });
-    if (!reviewing.ok) {
-      const blocked = buildReviewingBlockedApplyResult(operations, reviewing);
-      appendApplyResult(blocked);
-      appendCompletionReport({
-        conclusion: tx(
-          'No files were written: Track is enabled, but Codex could not verify Overleaf Reviewing/Track Changes.',
-          '这轮没有写入：已开启“留痕”要求，但 Codex 没能确认 Overleaf 正在用 Reviewing/Track Changes。'
-        ),
-        status: 'failed',
-        operations,
-        applyResults: [blocked],
-        mode: runMode,
-        nextStep: tx(
-          'Switch Overleaf to Reviewing/Track Changes manually and rerun, or turn off Track before writing.',
-          '请在 Overleaf 手动切到 Reviewing/Track Changes 后重新运行，或关闭“留痕”再写入。'
-        )
-      });
-      return {
-        summaryLine: tx(
-          'Write blocked: Overleaf Reviewing/Track Changes was not verified',
-          '已阻止写入：未确认 Overleaf Reviewing/Track Changes'
-        ),
-        hasSkippedOperations: true,
-        settlement: buildSettlement({ operations, applyResult: blocked }),
-        audit: buildAuditSummaryFromApply({
-          operations,
-          applyResults: [blocked],
-          blockedFiles: additionalSkippedEntries
-            .filter(item => item.result?.code === 'governance_blocked')
-            .map(item => summarizeOperationForAudit(item.operation, item.result, 'blocked')),
-          resultStatus: 'blocked'
-        })
-      };
-    }
     const applied = operations.length
       ? mergeApplyResultSkipped(await assetTransferBroker.applyOperations({
         operations,
@@ -851,8 +814,6 @@
       partitionUnsafeProjectPathOperations,
       evaluateGovernedOperations,
       buildGovernanceSkippedApplyResult,
-      buildReviewingBlockedApplyResult,
-      ensureReviewingBeforeWrite,
       confirmBinaryOperations,
       filterSyncChangesByOperations,
       writebackController,
